@@ -19,16 +19,21 @@ settings are preserved (a `.bak` copy is written before the settings file change
 
 ## What it does
 
-1. `winget install Oven-sh.Bun`, then refreshes PATH in the running process —
+1. Sets `NODE_USE_SYSTEM_CA=1` as a user environment variable. The corporate
+   TLS-inspecting proxy's CA is in the Windows certificate store, which Node and
+   bun ignore by default in favour of their own bundle — without this, https
+   fetches fail certificate verification. It is applied to the running process
+   too, so the installs below already benefit.
+2. `winget install Oven-sh.Bun`, then refreshes PATH in the running process —
    winget writes the new PATH to the registry, not to your session.
-2. `bun add -g --ignore-scripts @earendil-works/pi-coding-agent`, and puts bun's
+3. `bun add -g --ignore-scripts @earendil-works/pi-coding-agent`, and puts bun's
    global bin directory on your user PATH if it is not there already.
-3. Sets `npmCommand` to `bun` in `~/.pi/agent/settings.json`. **This is the step
+4. Sets `npmCommand` to `bun` in `~/.pi/agent/settings.json`. **This is the step
    that makes the rest work**: pi's package manager defaults to the literal
    command `npm`, which does not exist on a bun-only machine, so every
    `pi install npm:...` fails until this is set. pi has first-class bun support
    behind that setting.
-4. Installs the packages:
+5. Installs the packages:
 
    | Package | |
    | --- | --- |

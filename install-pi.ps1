@@ -104,6 +104,22 @@ function Add-ToUserPath {
     return $true
 }
 
+# The corporate TLS-inspecting proxy's CA lives in the Windows certificate store,
+# which Node and bun ignore by default - they ship their own bundle, so anything
+# they fetch over https fails to verify. This switches them to the system store.
+# Persisted for the user, and applied to this process so the installs below work.
+function Set-SystemCaTrust {
+    $name = 'NODE_USE_SYSTEM_CA'
+    $current = [Environment]::GetEnvironmentVariable($name, 'User')
+    if ($current -eq '1') {
+        Write-Note "$name already set for your user"
+    } else {
+        [Environment]::SetEnvironmentVariable($name, '1', 'User')
+        Write-Note "$name=1 set for your user (takes effect in new terminals)"
+    }
+    $env:NODE_USE_SYSTEM_CA = '1'
+}
+
 function Install-Bun {
     if (Get-Command bun -ErrorAction SilentlyContinue) {
         Write-Note "bun already installed: $((Get-Command bun).Source)"
@@ -191,6 +207,9 @@ function Install-PiPackage {
 # ---------------------------------------------------------------------------
 
 Write-Host 'pi workstation setup' -ForegroundColor White
+
+Write-Step 'corporate TLS'
+Set-SystemCaTrust
 
 if ($SkipBun) {
     Write-Step 'bun (skipped)'
