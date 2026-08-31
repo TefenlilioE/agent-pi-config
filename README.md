@@ -5,8 +5,14 @@ standard extension set. Everything runs on bun; npm is never needed.
 
 ```powershell
 # from an ordinary (non-admin) PowerShell
-.\install-pi.ps1
+git clone https://git3.dev.buzzi.com/ArtificialIntelligence/agent-pi-config.git
+cd agent-pi-config
+powershell -ExecutionPolicy Bypass -File .\install-pi.ps1
 ```
+
+`-ExecutionPolicy Bypass` is only needed where the machine policy blocks local
+scripts; `.\install-pi.ps1` on its own works otherwise. Nothing here needs admin
+rights.
 
 Re-running is safe: bun, pi and every package install are idempotent, and existing
 settings are preserved (a `.bak` copy is written before the settings file changes).
