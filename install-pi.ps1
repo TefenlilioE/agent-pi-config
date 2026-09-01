@@ -11,26 +11,16 @@
     Safe to re-run. Each step checks the current state first, and package installs
     are idempotent - pi updates what is already there.
 
-.PARAMETER GitUser
-    Gitea account name, used only for the internal git package. Pass this if that
-    install fails with 403: Gitea answers 403 rather than 401 when Windows has a
-    credential cached for a different account, so git never prompts and the clone
-    cannot recover on its own. Putting the name in the URL selects the right one.
-
 .PARAMETER SkipBun
     Skip the bun install (it is already installed and on PATH).
 
 .EXAMPLE
     .\install-pi.ps1
-
-.EXAMPLE
-    .\install-pi.ps1 -GitUser TefenlilioE
 #>
 
 #Requires -Version 5.1
 [CmdletBinding()]
 param(
-    [string] $GitUser,
     [switch] $SkipBun
 )
 
@@ -38,7 +28,7 @@ $ErrorActionPreference = 'Stop'
 
 $BunPackageId = 'Oven-sh.Bun'
 $PiPackage = '@earendil-works/pi-coding-agent'
-$BifrostRepo = 'git3.dev.buzzi.com/TefenlilioE/plugin-pi-bifrost.git'
+$BifrostRepo = 'https://github.com/TefenlilioE/plugin-pi-bifrost.git'
 
 # Extensions every workstation gets. Order is irrelevant; keep it readable.
 $Packages = @(
@@ -224,9 +214,7 @@ Install-Pi
 Write-Step 'pi package manager'
 Set-PiPackageManager
 
-$bifrostUrl = "https://$BifrostRepo"
-if ($GitUser) { $bifrostUrl = "https://$GitUser@$BifrostRepo" }
-$allPackages = $Packages + $bifrostUrl
+$allPackages = $Packages + $BifrostRepo
 
 Write-Step "packages ($($allPackages.Count))"
 $failed = @()
@@ -240,13 +228,6 @@ if ($failed.Count -eq 0) {
 } else {
     Write-Host "    $($failed.Count) of $($allPackages.Count) packages failed:" -ForegroundColor Red
     $failed | ForEach-Object { Write-Host "      $_" -ForegroundColor Red }
-    if ($failed -contains $bifrostUrl -and -not $GitUser) {
-        Write-Host ''
-        Write-Host '    The internal package is served by Gitea, which answers 403 instead of 401' -ForegroundColor Yellow
-        Write-Host '    when Windows has a credential cached for a different account - so git never' -ForegroundColor Yellow
-        Write-Host '    prompts. Re-run with your own account name to select it:' -ForegroundColor Yellow
-        Write-Host '      .\install-pi.ps1 -SkipBun -GitUser <your-gitea-user>' -ForegroundColor Yellow
-    }
 }
 
 Write-Host ''

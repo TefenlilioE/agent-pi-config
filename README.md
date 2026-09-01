@@ -11,8 +11,8 @@ irm https://raw.githubusercontent.com/TefenlilioE/agent-pi-config/main/install.p
 The bootstrap (`install.ps1`) installs **git** via winget if it is missing, then
 downloads and runs `install-pi.ps1`. Nothing here needs admin rights.
 
-If you need parameters (`-GitUser`, `-SkipBun`), run the main script directly —
-an iex pipe cannot pass them:
+If you need parameters (`-SkipBun`), run the main script directly — an iex pipe
+cannot pass them:
 
 ```powershell
 git clone https://github.com/TefenlilioE/agent-pi-config.git
@@ -29,7 +29,7 @@ settings are preserved (a `.bak` copy is written before the settings file change
 ## What it does
 
 0. *(bootstrap only)* `winget install Git.Git` if git is not on PATH — git is
-   needed later to clone the internal Bifrost package from Gitea.
+   needed later to clone the Bifrost plugin from GitHub.
 1. Sets `NODE_USE_SYSTEM_CA=1` as a user environment variable. The corporate
    TLS-inspecting proxy's CA is in the Windows certificate store, which Node and
    bun ignore by default in favour of their own bundle — without this, https
@@ -56,7 +56,7 @@ settings are preserved (a `.bak` copy is written before the settings file change
    | `npm:pi-caveman` | |
    | `npm:@dietrichgebert/ponytail` | |
    | `npm:pi-observability` | |
-   | `plugin-pi-bifrost` | internal, from Gitea — the Bifrost gateway provider |
+   | [`plugin-pi-bifrost`](https://github.com/TefenlilioE/plugin-pi-bifrost) | from GitHub — the Bifrost gateway provider |
 
 A failing package does not stop the others; the script lists what failed and exits
 non-zero.
@@ -67,16 +67,6 @@ Open a new terminal (for the PATH change), start `pi`, and configure the gateway
 once: `/login` → **Bifrost gateway** → URL `https://bifrost.dev.ai.dy.droot.org`,
 then the virtual key. Alternatively set `BIFROST_BASE_URL` and `BIFROST_VIRTUAL_KEY`
 in the environment and skip the login.
-
-## If the internal package fails with 403
-
-Gitea answers **403** rather than 401 when Windows has a credential cached for a
-different account, so git never prompts and cannot recover on its own. Name your
-account in the URL to select the right credential:
-
-```powershell
-.\install-pi.ps1 -SkipBun -GitUser <your-gitea-user>
-```
 
 ## Adding or removing packages
 

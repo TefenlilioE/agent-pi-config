@@ -4,8 +4,7 @@
 #
 # Installs git via winget if it is missing, then downloads install-pi.ps1 from
 # this repo and runs it. No param block: iex pipes cannot pass parameters, so
-# anyone needing -GitUser or -SkipBun should download install-pi.ps1 and run it
-# directly (the failure message in install-pi.ps1 says so too).
+# anyone needing -SkipBun should download install-pi.ps1 and run it directly.
 
 $ErrorActionPreference = 'Stop'
 
@@ -75,9 +74,9 @@ try {
     if ($LASTEXITCODE -ne 0) {
         Write-Host ''
         Write-Host "install-pi.ps1 exited with code $LASTEXITCODE." -ForegroundColor Yellow
-        Write-Host 'To re-run with options (e.g. -GitUser, -SkipBun), download it directly:' -ForegroundColor Yellow
+        Write-Host 'To re-run with options (e.g. -SkipBun), download it directly:' -ForegroundColor Yellow
         Write-Host "  irm $RawBase/install-pi.ps1 -OutFile install-pi.ps1" -ForegroundColor Yellow
-        Write-Host '  powershell -ExecutionPolicy Bypass -File .\install-pi.ps1 -SkipBun -GitUser <your-gitea-user>' -ForegroundColor Yellow
+        Write-Host '  powershell -ExecutionPolicy Bypass -File .\install-pi.ps1 -SkipBun' -ForegroundColor Yellow
     }
 } finally {
     Remove-Item $scriptPath -ErrorAction SilentlyContinue
