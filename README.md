@@ -1,65 +1,63 @@
-# pi workstation setup
+# agent-pi-config — opinionated pi setup
 
-One script that takes a fresh Windows workstation to a working pi install with the
-standard extension set. Everything runs on bun; npm is never needed.
+This repo **is** the pi configuration: it gets cloned to `~/.pi/agent`, the
+directory pi loads everything from. `settings.json`, extensions, skills, prompt
+templates and themes all live here in git — updating a workstation is a
+`git pull`.
 
 ```powershell
-# from an ordinary (non-admin) PowerShell — no git needed, it installs itself
+# from an ordinary (non-admin) PowerShell — installs git, bun and pi itself
 irm https://raw.githubusercontent.com/TefenlilioE/agent-pi-config/main/install.ps1 | iex
 ```
 
-The bootstrap (`install.ps1`) installs **git** via winget if it is missing, then
-downloads and runs `install-pi.ps1`. Nothing here needs admin rights.
+Re-running the one-liner is safe: every step checks the current state first, and
+a re-run just updates the config via `git pull`. Nothing needs admin rights.
 
-If you need parameters (`-SkipBun`), run the main script directly — an iex pipe
-cannot pass them:
+## What the install script does
 
-```powershell
-git clone https://github.com/TefenlilioE/agent-pi-config.git
-cd agent-pi-config
-powershell -ExecutionPolicy Bypass -File .\install-pi.ps1
-```
-
-`-ExecutionPolicy Bypass` is only needed where the machine policy blocks local
-scripts; `.\install-pi.ps1` on its own works otherwise.
-
-Re-running is safe: bun, pi and every package install are idempotent, and existing
-settings are preserved (a `.bak` copy is written before the settings file changes).
-
-## What it does
-
-0. *(bootstrap only)* `winget install Git.Git` if git is not on PATH — git is
-   needed later to clone the Bifrost plugin from GitHub.
 1. Sets `NODE_USE_SYSTEM_CA=1` as a user environment variable. The corporate
    TLS-inspecting proxy's CA is in the Windows certificate store, which Node and
    bun ignore by default in favour of their own bundle — without this, https
-   fetches fail certificate verification. It is applied to the running process
-   too, so the installs below already benefit.
-2. `winget install Oven-sh.Bun`, then refreshes PATH in the running process —
-   winget writes the new PATH to the registry, not to your session.
+   fetches fail certificate verification.
+2. `winget install Git.Git` and `winget install Oven-sh.Bun` (each skipped when
+   already on PATH), refreshing PATH in the running process — winget writes the
+   new PATH to the registry, not to your session.
 3. `bun add -g --ignore-scripts @earendil-works/pi-coding-agent`, and puts bun's
    global bin directory on your user PATH if it is not there already.
-4. Sets `npmCommand` to `bun` in `~/.pi/agent/settings.json`. **This is the step
-   that makes the rest work**: pi's package manager defaults to the literal
-   command `npm`, which does not exist on a bun-only machine, so every
-   `pi install npm:...` fails until this is set. pi has first-class bun support
-   behind that setting.
-5. Installs the packages:
+4. Clones this repo into `~/.pi/agent` (or `$env:PI_CODING_AGENT_DIR`).
+   - Already a clone → `git pull --rebase --autostash`.
+   - Existing pi directory that is not a clone → adopted in place: the repo is
+     checked out into it, your old `settings.json` is backed up to
+     `settings.json.bak` and its keys (theme, default model, extra packages)
+     are merged back in. Repo opinions win for `npmCommand` and the package list.
+5. Runs `pi install` for every package listed in `settings.json`. pi would also
+   install missing packages on its next startup — doing it here just makes
+   failures visible immediately.
 
-   | Package | |
-   | --- | --- |
-   | `npm:pi-subagents` | |
-   | `npm:pi-web-access` | |
-   | `npm:pi-mcp-adapter` | |
-   | `npm:pi-lens` | |
-   | `npm:@narumitw/pi-goal` | |
-   | `npm:pi-caveman` | |
-   | `npm:@dietrichgebert/ponytail` | |
-   | `npm:pi-observability` | |
-   | [`plugin-pi-bifrost`](https://github.com/TefenlilioE/plugin-pi-bifrost) | from GitHub — the Bifrost gateway provider |
+## What lives in the repo
 
-A failing package does not stop the others; the script lists what failed and exits
-non-zero.
+| Path | |
+| --- | --- |
+| `settings.json` | the single source of truth: `npmCommand` is `bun` (pi defaults to the literal command `npm`, which does not exist on a bun-only machine) and the `packages` list below |
+| `extensions/` | team-local extensions (`.ts`/`.js`), auto-loaded by pi |
+| `skills/` | team-local skills, auto-loaded (top-level `.md` files and `SKILL.md` folders) |
+| `prompts/` | prompt templates, auto-loaded |
+| `themes/` | themes (`.json`), auto-loaded |
+| `install.ps1` | the bootstrap one-liner target |
+
+Packages installed from `settings.json`:
+
+| Package | |
+| --- | --- |
+| `npm:pi-subagents` | |
+| `npm:pi-web-access` | |
+| `npm:pi-mcp-adapter` | |
+| `npm:pi-lens` | |
+| `npm:@narumitw/pi-goal` | |
+| `npm:pi-caveman` | |
+| `npm:pi-observability` | |
+| `npm:@dietrichgebert/ponytail` | |
+| [`plugin-pi-bifrost`](https://github.com/TefenlilioE/plugin-pi-bifrost) | the Bifrost gateway provider |
 
 ## After it runs
 
@@ -68,20 +66,18 @@ once: `/login` → **Bifrost gateway** → URL `https://bifrost.dev.ai.dy.droot.
 then the virtual key. Alternatively set `BIFROST_BASE_URL` and `BIFROST_VIRTUAL_KEY`
 in the environment and skip the login.
 
-## Adding or removing packages
+## Changing the setup
 
-Edit the `$Packages` list at the top of `install-pi.ps1`. Employees pick up changes
-by re-running the script; `pi update` refreshes what is already installed.
+Edit `settings.json` (packages) or drop files into `extensions/`, `skills/`,
+`prompts/`, `themes/`, commit, push. Workstations pick it up by re-running the
+one-liner or `git -C ~/.pi/agent pull`; pi installs newly listed packages on its
+next startup.
 
-If this list keeps growing, the better shape is a single **pi pack** — one internal
-repo whose `package.json` declares `pi.extensions`, `pi.skills`, `pi.prompts` and
-`pi.themes`, installed with one command and updated with `pi update`. Keep that pack
-free of dependencies: pi runs the configured package manager inside the clone, and
-dependencies (dev ones included) are then pulled onto every workstation.
+## Known trade-off: settings.json drift
 
-## Verified
-
-The full script was run end to end against an isolated pi state directory
-(`PI_CODING_AGENT_DIR`) on Windows 11 with pi 0.84.4 and bun 1.4.0: all nine
-packages installed, pi started with no extension errors, and a second run was a
-clean no-op.
+pi writes personal choices (theme, default model, `pi install`ed extras) into
+the same `settings.json` this repo tracks, so `~/.pi/agent` will show local
+modifications — that is expected. The install script pulls with
+`--rebase --autostash`; if a pull ever conflicts, resolve it in `~/.pi/agent`
+like any git conflict. Runtime state (`npm/`, `git/`, `sessions/`, `auth.json`,
+…) is gitignored.

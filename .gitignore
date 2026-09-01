@@ -1,3 +1,15 @@
+# pi runtime state — everything pi writes into its agent dir that is not config.
+# This repo is cloned to ~/.pi/agent, so the working tree doubles as pi's state dir.
+npm/
+git/
+bin/
 node_modules/
+sessions/
+logs/
+auth.json
+trust.json
+models.json
+keybindings.json
 *.bak
+.env
 .deepwork/

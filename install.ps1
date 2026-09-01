@@ -1,18 +1,23 @@
-# Bootstrap for the pi workstation setup. Designed to be piped through iex:
+# Opinionated pi workstation setup. Designed to be piped through iex:
 #
 #   irm https://raw.githubusercontent.com/TefenlilioE/agent-pi-config/main/install.ps1 | iex
 #
-# Installs git via winget if it is missing, then downloads install-pi.ps1 from
-# this repo and runs it. No param block: iex pipes cannot pass parameters, so
-# anyone needing -SkipBun should download install-pi.ps1 and run it directly.
+# Installs git, bun and the pi coding agent, then clones this repo into
+# ~/.pi/agent so the whole configuration (settings.json, extensions/, skills/,
+# prompts/, themes/) lives in git. Finally it installs the packages that
+# settings.json lists. Safe to re-run: every step checks the current state
+# first, and a re-run updates the config via git pull.
+#
+# No param block on purpose: an iex pipe cannot pass parameters.
 
 $ErrorActionPreference = 'Stop'
 
-$RawBase = 'https://raw.githubusercontent.com/TefenlilioE/agent-pi-config/main'
+$RepoUrl = 'https://github.com/TefenlilioE/agent-pi-config.git'
+$PiPackage = '@earendil-works/pi-coding-agent'
 
 # Windows PowerShell 5.1 turns any line a native command writes to stderr into a
-# terminating error while ErrorActionPreference is Stop - and winget reports
-# progress there. Run it through here and judge it by exit code.
+# terminating error while ErrorActionPreference is Stop - and winget, git and bun
+# all report progress there. Run them through here and judge them by exit code.
 function Invoke-Native {
     param(
         [Parameter(Mandatory)] [string] $File,
@@ -30,6 +35,17 @@ function Invoke-Native {
     return [pscustomobject]@{ ExitCode = $code; Output = @($output) }
 }
 
+function Write-Step {
+    param([string] $Message)
+    Write-Host ''
+    Write-Host "==> $Message" -ForegroundColor Cyan
+}
+
+function Write-Note {
+    param([string] $Message)
+    Write-Host "    $Message" -ForegroundColor DarkGray
+}
+
 # winget writes the new PATH to the registry, not to this process.
 function Sync-Path {
     $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
@@ -37,47 +53,217 @@ function Sync-Path {
     $env:Path = ($machine, $user | Where-Object { $_ }) -join ';'
 }
 
-function Install-Git {
-    if (Get-Command git -ErrorAction SilentlyContinue) {
-        Write-Host "==> git already installed: $((Get-Command git).Source)" -ForegroundColor Cyan
+function Add-ToUserPath {
+    param([string] $Directory)
+
+    $current = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $entries = @()
+    if ($current) { $entries = $current -split ';' | Where-Object { $_ } }
+    $already = $entries | Where-Object { $_.TrimEnd('\') -ieq $Directory.TrimEnd('\') }
+    if ($already) { return $false }
+
+    [Environment]::SetEnvironmentVariable('Path', (($entries + $Directory) -join ';'), 'User')
+    $env:Path = "$env:Path;$Directory"
+    return $true
+}
+
+function Install-WingetPackage {
+    param(
+        [Parameter(Mandatory)] [string] $Id,
+        [Parameter(Mandatory)] [string] $Command
+    )
+
+    if (Get-Command $Command -ErrorAction SilentlyContinue) {
+        Write-Note "$Command already installed: $((Get-Command $Command).Source)"
         return
     }
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-        throw 'git is missing and winget is not available. Install App Installer from the Microsoft Store, then re-run.'
+        throw "$Command is missing and winget is not available. Install App Installer from the Microsoft Store, then re-run."
     }
 
-    Write-Host '==> installing git via winget' -ForegroundColor Cyan
     $result = Invoke-Native winget @(
-        'install', '--id', 'Git.Git', '--exact', '--source', 'winget',
+        'install', '--id', $Id, '--exact', '--source', 'winget',
         '--accept-package-agreements', '--accept-source-agreements'
     )
-    $result.Output | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+    $result.Output | ForEach-Object { Write-Note $_ }
     # winget reports 0x8A15002B ("no applicable upgrade") as a failure on re-runs,
     # so the PATH check below decides whether this actually worked.
-    if ($result.ExitCode -ne 0) { Write-Host "    winget exit code $($result.ExitCode)" -ForegroundColor DarkGray }
+    if ($result.ExitCode -ne 0) { Write-Note "winget exit code $($result.ExitCode)" }
 
     Sync-Path
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        throw 'git is still not on PATH after installing. Open a new terminal and re-run.'
+    if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) {
+        throw "$Command is still not on PATH after installing. Open a new terminal and re-run."
     }
-    Write-Host "    git installed: $((Get-Command git).Source)" -ForegroundColor DarkGray
+    Write-Note "$Command installed: $((Get-Command $Command).Source)"
 }
 
-Install-Git
-
-Write-Host '==> downloading install-pi.ps1' -ForegroundColor Cyan
-$scriptPath = Join-Path ([System.IO.Path]::GetTempPath()) "install-pi-$([guid]::NewGuid().ToString('N')).ps1"
-Invoke-RestMethod "$RawBase/install-pi.ps1" -OutFile $scriptPath
-
-try {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host ''
-        Write-Host "install-pi.ps1 exited with code $LASTEXITCODE." -ForegroundColor Yellow
-        Write-Host 'To re-run with options (e.g. -SkipBun), download it directly:' -ForegroundColor Yellow
-        Write-Host "  irm $RawBase/install-pi.ps1 -OutFile install-pi.ps1" -ForegroundColor Yellow
-        Write-Host '  powershell -ExecutionPolicy Bypass -File .\install-pi.ps1 -SkipBun' -ForegroundColor Yellow
+# The corporate TLS-inspecting proxy's CA lives in the Windows certificate store,
+# which Node and bun ignore by default - they ship their own bundle, so anything
+# they fetch over https fails to verify. This switches them to the system store.
+# Persisted for the user, and applied to this process so the installs below work.
+function Set-SystemCaTrust {
+    $name = 'NODE_USE_SYSTEM_CA'
+    $current = [Environment]::GetEnvironmentVariable($name, 'User')
+    if ($current -eq '1') {
+        Write-Note "$name already set for your user"
+    } else {
+        [Environment]::SetEnvironmentVariable($name, '1', 'User')
+        Write-Note "$name=1 set for your user (takes effect in new terminals)"
     }
-} finally {
-    Remove-Item $scriptPath -ErrorAction SilentlyContinue
+    $env:NODE_USE_SYSTEM_CA = '1'
 }
+
+function Install-Pi {
+    # --ignore-scripts: nothing in this dependency tree needs postinstall, and it
+    # keeps the install from running arbitrary code on a managed workstation.
+    $result = Invoke-Native bun @('add', '-g', '--ignore-scripts', $PiPackage)
+    $result.Output | ForEach-Object { Write-Note $_ }
+    if ($result.ExitCode -ne 0) { throw "bun add -g $PiPackage failed with exit code $($result.ExitCode)" }
+
+    $binResult = Invoke-Native bun @('pm', 'bin', '-g')
+    $binDir = $binResult.Output | Where-Object { $_ } | Select-Object -First 1
+    if ($binResult.ExitCode -ne 0 -or -not $binDir) { $binDir = Join-Path $env:USERPROFILE '.bun\bin' }
+    if (Add-ToUserPath $binDir) { Write-Note "added $binDir to your PATH" }
+
+    if (-not (Get-Command pi -ErrorAction SilentlyContinue)) {
+        throw "pi is not on PATH. Expected it in $binDir."
+    }
+    Write-Note "pi installed: $((Invoke-Native pi @('--version')).Output -join ' ')"
+}
+
+# ~/.pi/agent IS the clone of this repo. Three states to handle:
+#   - already a git clone: pull (rebasing local drift pi wrote into settings.json)
+#   - missing or empty: plain clone
+#   - existing non-git agent dir: adopt it - clone the repo into the directory
+#     via init+fetch+checkout, preserving the user's old settings.json keys
+function Sync-ConfigRepo {
+    param([Parameter(Mandatory)] [string] $AgentDir)
+
+    if (Test-Path (Join-Path $AgentDir '.git')) {
+        Write-Note "updating existing clone in $AgentDir"
+        $result = Invoke-Native git @('-C', $AgentDir, 'pull', '--rebase', '--autostash')
+        $result.Output | ForEach-Object { Write-Note $_ }
+        if ($result.ExitCode -ne 0) {
+            Write-Note "git pull failed - resolve it manually in $AgentDir, then re-run. Continuing with the current checkout."
+        }
+        return
+    }
+
+    $isEmpty = -not (Test-Path $AgentDir) -or -not (Get-ChildItem -Force $AgentDir -ErrorAction SilentlyContinue)
+    if ($isEmpty) {
+        Write-Note "cloning into $AgentDir"
+        $result = Invoke-Native git @('clone', $RepoUrl, $AgentDir)
+        $result.Output | ForEach-Object { Write-Note $_ }
+        if ($result.ExitCode -ne 0) { throw "git clone failed with exit code $($result.ExitCode)" }
+        return
+    }
+
+    # Adopt: pi has run here before. Keep the user's settings (merged below) and
+    # every runtime file; only tracked files are overwritten by the checkout.
+    Write-Note "adopting existing pi directory $AgentDir"
+    $settingsPath = Join-Path $AgentDir 'settings.json'
+    $oldSettings = $null
+    if (Test-Path $settingsPath) {
+        $raw = Get-Content -Raw -Path $settingsPath
+        if ($raw.Trim()) { $oldSettings = $raw | ConvertFrom-Json }
+        Copy-Item $settingsPath "$settingsPath.bak" -Force
+        Write-Note "existing settings.json backed up to settings.json.bak"
+    }
+
+    foreach ($step in @(
+        @('init'),
+        @('remote', 'add', 'origin', $RepoUrl),
+        @('fetch', '--depth', '1', 'origin', 'main'),
+        @('checkout', '-f', '-B', 'main', 'origin/main')
+    )) {
+        $result = Invoke-Native git (@('-C', $AgentDir) + $step)
+        if ($result.ExitCode -ne 0) {
+            $result.Output | ForEach-Object { Write-Note $_ }
+            throw "git $($step -join ' ') failed with exit code $($result.ExitCode)"
+        }
+    }
+
+    if ($oldSettings) {
+        # The repo's settings.json wins for npmCommand and its package list, but
+        # the user's other choices (theme, default model, extra packages) survive.
+        $merged = [ordered]@{}
+        $repoSettings = Get-Content -Raw -Path $settingsPath | ConvertFrom-Json
+        foreach ($property in $repoSettings.PSObject.Properties) { $merged[$property.Name] = $property.Value }
+        foreach ($property in $oldSettings.PSObject.Properties) {
+            if ($property.Name -eq 'npmCommand') { continue }
+            if ($property.Name -eq 'packages') {
+                $repoPackages = @($merged['packages'])
+                $extra = @($property.Value) | Where-Object { $repoPackages -notcontains $_ }
+                $merged['packages'] = $repoPackages + $extra
+                continue
+            }
+            $merged[$property.Name] = $property.Value
+        }
+        $json = $merged | ConvertTo-Json -Depth 20
+        [System.IO.File]::WriteAllText($settingsPath, $json, (New-Object System.Text.UTF8Encoding($false)))
+        Write-Note "merged your existing settings into the repo's settings.json"
+    }
+}
+
+# pi also installs missing packages on startup, but doing it here means the
+# first `pi` launch is instant and any failure is visible now, per package.
+function Install-ConfiguredPackages {
+    param([Parameter(Mandatory)] [string] $AgentDir)
+
+    $settingsPath = Join-Path $AgentDir 'settings.json'
+    $settings = Get-Content -Raw -Path $settingsPath | ConvertFrom-Json
+    $sources = @($settings.packages) | ForEach-Object { if ($_ -is [string]) { $_ } else { $_.source } } | Where-Object { $_ }
+
+    $failed = @()
+    foreach ($source in $sources) {
+        Write-Host ("    {0,-62}" -f $source) -NoNewline
+        $result = Invoke-Native pi @('install', $source)
+        if ($result.ExitCode -eq 0) {
+            Write-Host 'ok' -ForegroundColor Green
+        } else {
+            Write-Host 'FAILED' -ForegroundColor Red
+            $result.Output | Select-Object -Last 4 | ForEach-Object { Write-Host "        $_" -ForegroundColor DarkGray }
+            $failed += $source
+        }
+    }
+    return ,$failed
+}
+
+# ---------------------------------------------------------------------------
+
+Write-Host 'pi workstation setup' -ForegroundColor White
+
+Write-Step 'corporate TLS'
+Set-SystemCaTrust
+
+Write-Step 'git'
+Install-WingetPackage -Id 'Git.Git' -Command 'git'
+
+Write-Step 'bun'
+Install-WingetPackage -Id 'Oven-sh.Bun' -Command 'bun'
+
+Write-Step 'pi coding agent'
+Install-Pi
+
+$agentDir = $env:PI_CODING_AGENT_DIR
+if (-not $agentDir) { $agentDir = Join-Path $env:USERPROFILE '.pi\agent' }
+
+Write-Step 'configuration repo'
+Sync-ConfigRepo -AgentDir $agentDir
+
+Write-Step 'packages'
+$failed = Install-ConfiguredPackages -AgentDir $agentDir
+
+Write-Step 'result'
+if (-not $failed) {
+    Write-Host '    all packages installed' -ForegroundColor Green
+} else {
+    Write-Host "    $($failed.Count) package(s) failed:" -ForegroundColor Red
+    $failed | ForEach-Object { Write-Host "      $_" -ForegroundColor Red }
+    Write-Host '    pi retries missing packages on startup; or fix the cause and re-run this script.' -ForegroundColor Yellow
+}
+
+Write-Host ''
+Write-Note 'Open a new terminal so PATH changes apply, then run: pi'
+Write-Note 'Configure the Bifrost gateway once inside pi:  /login  ->  Bifrost gateway'
+if ($failed) { exit 1 }

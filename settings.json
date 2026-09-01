@@ -1,0 +1,14 @@
+{
+  "npmCommand": ["bun"],
+  "packages": [
+    "npm:pi-subagents",
+    "npm:pi-web-access",
+    "npm:pi-mcp-adapter",
+    "npm:pi-lens",
+    "npm:@narumitw/pi-goal",
+    "npm:pi-caveman",
+    "npm:@dietrichgebert/ponytail",
+    "npm:pi-observability",
+    "https://github.com/TefenlilioE/plugin-pi-bifrost"
+  ]
+}
