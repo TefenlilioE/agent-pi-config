@@ -4,21 +4,32 @@ One script that takes a fresh Windows workstation to a working pi install with t
 standard extension set. Everything runs on bun; npm is never needed.
 
 ```powershell
-# from an ordinary (non-admin) PowerShell
-git clone https://git3.dev.buzzi.com/ArtificialIntelligence/agent-pi-config.git
+# from an ordinary (non-admin) PowerShell — no git needed, it installs itself
+irm https://raw.githubusercontent.com/TefenlilioE/agent-pi-config/main/install.ps1 | iex
+```
+
+The bootstrap (`install.ps1`) installs **git** via winget if it is missing, then
+downloads and runs `install-pi.ps1`. Nothing here needs admin rights.
+
+If you need parameters (`-GitUser`, `-SkipBun`), run the main script directly —
+an iex pipe cannot pass them:
+
+```powershell
+git clone https://github.com/TefenlilioE/agent-pi-config.git
 cd agent-pi-config
 powershell -ExecutionPolicy Bypass -File .\install-pi.ps1
 ```
 
 `-ExecutionPolicy Bypass` is only needed where the machine policy blocks local
-scripts; `.\install-pi.ps1` on its own works otherwise. Nothing here needs admin
-rights.
+scripts; `.\install-pi.ps1` on its own works otherwise.
 
 Re-running is safe: bun, pi and every package install are idempotent, and existing
 settings are preserved (a `.bak` copy is written before the settings file changes).
 
 ## What it does
 
+0. *(bootstrap only)* `winget install Git.Git` if git is not on PATH — git is
+   needed later to clone the internal Bifrost package from Gitea.
 1. Sets `NODE_USE_SYSTEM_CA=1` as a user environment variable. The corporate
    TLS-inspecting proxy's CA is in the Windows certificate store, which Node and
    bun ignore by default in favour of their own bundle — without this, https
