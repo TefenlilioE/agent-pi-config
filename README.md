@@ -30,7 +30,9 @@ a re-run just updates the config via `git pull`. Nothing needs admin rights.
 3. `bun add -g --ignore-scripts @earendil-works/pi-coding-agent`, and puts bun's
    global bin directory on your user PATH if it is not there already.
 4. Clones this repo into `~/.pi/agent` (or `$env:PI_CODING_AGENT_DIR`).
-   - Already a clone → `git pull --rebase --autostash`.
+   - Already a clone → your `settings.json` keys are remembered, the file is
+     reset to the repo version, `git pull --rebase --autostash`, then your keys
+     are merged back (see the drift note at the end).
    - Existing pi directory that is not a clone → adopted in place: the repo is
      checked out into it, your old `settings.json` is backed up to
      `settings.json.bak` and its keys (theme, default model, extra packages)
@@ -90,14 +92,19 @@ in the environment and skip the login.
 
 Edit `settings.json` (packages) or drop files into `extensions/`, `skills/`,
 `prompts/`, `themes/`, commit, push. Workstations pick it up by re-running the
-one-liner or `git -C ~/.pi/agent pull`; pi installs newly listed packages on its
+one-liner (preferred — see the drift note below) or `git -C ~/.pi/agent pull`
+for changes outside `settings.json`; pi installs newly listed packages on its
 next startup.
 
 ## Known trade-off: settings.json drift
 
 pi writes personal choices (theme, default model, `pi install`ed extras) into
-the same `settings.json` this repo tracks, so `~/.pi/agent` will show local
-modifications — that is expected. The install script pulls with
-`--rebase --autostash`; if a pull ever conflicts, resolve it in `~/.pi/agent`
-like any git conflict. Runtime state (`npm/`, `git/`, `sessions/`, `auth.json`,
-…) is gitignored.
+the same `settings.json` this repo tracks, in its own formatting, so `~/.pi/agent`
+will always show `settings.json` as modified — that is expected. The install
+script therefore never lets git merge that file: on every run it reads your
+current settings, resets the file to the repo version, pulls, and writes your
+keys back on top (repo wins for `npmCommand`, `defaultTools` and its package
+list; your extra packages are appended). A `git pull` by hand will conflict
+whenever the repo changed `settings.json`; use the one-liner instead, which also
+cleans up after such a failed pull. Runtime state (`npm/`, `git/`, `sessions/`,
+`auth.json`, …) is gitignored.

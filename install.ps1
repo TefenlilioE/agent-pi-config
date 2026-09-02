@@ -160,20 +160,97 @@ function Install-Pi {
     Write-Note "pi installed: $((Invoke-Native pi @('--version')).Output -join ' ')"
 }
 
+# Reads settings.json as an object; $null when the file is missing, empty or not
+# valid JSON (e.g. left with conflict markers by an earlier failed pull).
+function Read-SettingsFile {
+    param([Parameter(Mandatory)] [string] $Path)
+    if (-not (Test-Path $Path)) { return $null }
+    $raw = Get-Content -Raw -Path $Path
+    if (-not $raw.Trim()) { return $null }
+    try { return ($raw | ConvertFrom-Json) } catch { return $null }
+}
+
+# The repo's settings.json wins for npmCommand, defaultTools and its package list,
+# but the user's other choices (theme, default model, extra packages) survive.
+function Merge-Settings {
+    param(
+        [Parameter(Mandatory)] [string] $SettingsPath,
+        [Parameter(Mandatory)] $UserSettings
+    )
+    $merged = [ordered]@{}
+    $repoSettings = Get-Content -Raw -Path $SettingsPath | ConvertFrom-Json
+    foreach ($property in $repoSettings.PSObject.Properties) { $merged[$property.Name] = $property.Value }
+    foreach ($property in $UserSettings.PSObject.Properties) {
+        if ($property.Name -in @('npmCommand', 'defaultTools')) { continue }
+        if ($property.Name -eq 'packages') {
+            $repoPackages = @($merged['packages'])
+            $extra = @($property.Value) | Where-Object { $repoPackages -notcontains $_ }
+            $merged['packages'] = $repoPackages + $extra
+            continue
+        }
+        $merged[$property.Name] = $property.Value
+    }
+    $json = $merged | ConvertTo-Json -Depth 20
+    [System.IO.File]::WriteAllText($SettingsPath, $json, (New-Object System.Text.UTF8Encoding($false)))
+}
+
 # ~/.pi/agent IS the clone of this repo. Three states to handle:
-#   - already a git clone: pull (rebasing local drift pi wrote into settings.json)
+#   - already a git clone: update it. pi rewrites settings.json in its own
+#     formatting, so a plain `pull --autostash` conflicts whenever the repo
+#     changes that file. Instead: remember the user's settings, reset the file
+#     to HEAD, pull, and merge the user's keys back in (same rules as adopting).
 #   - missing or empty: plain clone
 #   - existing non-git agent dir: adopt it - clone the repo into the directory
 #     via init+fetch+checkout, preserving the user's old settings.json keys
 function Sync-ConfigRepo {
     param([Parameter(Mandatory)] [string] $AgentDir)
 
+    $settingsPath = Join-Path $AgentDir 'settings.json'
+
     if (Test-Path (Join-Path $AgentDir '.git')) {
         Write-Note "updating existing clone in $AgentDir"
+
+        # The user's current settings: the working copy, or - if an earlier pull
+        # left it with conflict markers - the autostash git kept for us.
+        $userSettings = Read-SettingsFile $settingsPath
+        $stashList = (Invoke-Native git @('-C', $AgentDir, 'stash', 'list')).Output | Where-Object { $_ }
+        if (-not $userSettings -and $stashList) {
+            $stashed = Invoke-Native git @('-C', $AgentDir, 'show', 'stash@{0}:settings.json')
+            if ($stashed.ExitCode -eq 0) {
+                try { $userSettings = ($stashed.Output -join "`n") | ConvertFrom-Json } catch { }
+                if ($userSettings) { Write-Note "recovered your settings from the stash of an earlier failed pull" }
+            }
+        }
+        if ($userSettings) {
+            Copy-Item $settingsPath "$settingsPath.bak" -Force -ErrorAction SilentlyContinue
+        } else {
+            Write-Note "could not read your current settings.json - the repo version will be used as is"
+        }
+
+        # Drop that leftover stash if it only carried settings.json (which we now hold).
+        if ($stashList) {
+            $touched = @((Invoke-Native git @('-C', $AgentDir, 'stash', 'show', '--name-only', 'stash@{0}')).Output | Where-Object { $_ })
+            if ($userSettings -and $touched.Count -eq 1 -and $touched[0] -eq 'settings.json') {
+                Invoke-Native git @('-C', $AgentDir, 'stash', 'drop', 'stash@{0}') | Out-Null
+                Write-Note "dropped the leftover stash (it only held settings.json)"
+            } else {
+                Write-Note "leaving git stash untouched: $($stashList -join '; ')"
+            }
+        }
+
+        # Reset settings.json to HEAD so the pull has nothing to conflict on.
+        $reset = Invoke-Native git @('-C', $AgentDir, 'checkout', 'HEAD', '--', 'settings.json')
+        if ($reset.ExitCode -ne 0) { $reset.Output | ForEach-Object { Write-Note $_ } }
+
         $result = Invoke-Native git @('-C', $AgentDir, 'pull', '--rebase', '--autostash')
         $result.Output | ForEach-Object { Write-Note $_ }
         if ($result.ExitCode -ne 0) {
             Write-Note "git pull failed - resolve it manually in $AgentDir, then re-run. Continuing with the current checkout."
+        }
+
+        if ($userSettings) {
+            Merge-Settings -SettingsPath $settingsPath -UserSettings $userSettings
+            Write-Note "merged your settings (theme, model, extra packages) into the updated settings.json"
         }
         return
     }
@@ -190,11 +267,8 @@ function Sync-ConfigRepo {
     # Adopt: pi has run here before. Keep the user's settings (merged below) and
     # every runtime file; only tracked files are overwritten by the checkout.
     Write-Note "adopting existing pi directory $AgentDir"
-    $settingsPath = Join-Path $AgentDir 'settings.json'
-    $oldSettings = $null
+    $oldSettings = Read-SettingsFile $settingsPath
     if (Test-Path $settingsPath) {
-        $raw = Get-Content -Raw -Path $settingsPath
-        if ($raw.Trim()) { $oldSettings = $raw | ConvertFrom-Json }
         Copy-Item $settingsPath "$settingsPath.bak" -Force
         Write-Note "existing settings.json backed up to settings.json.bak"
     }
@@ -213,23 +287,7 @@ function Sync-ConfigRepo {
     }
 
     if ($oldSettings) {
-        # The repo's settings.json wins for npmCommand, defaultTools and its package
-        # list, but the user's other choices (theme, default model, extra packages) survive.
-        $merged = [ordered]@{}
-        $repoSettings = Get-Content -Raw -Path $settingsPath | ConvertFrom-Json
-        foreach ($property in $repoSettings.PSObject.Properties) { $merged[$property.Name] = $property.Value }
-        foreach ($property in $oldSettings.PSObject.Properties) {
-            if ($property.Name -in @('npmCommand', 'defaultTools')) { continue }
-            if ($property.Name -eq 'packages') {
-                $repoPackages = @($merged['packages'])
-                $extra = @($property.Value) | Where-Object { $repoPackages -notcontains $_ }
-                $merged['packages'] = $repoPackages + $extra
-                continue
-            }
-            $merged[$property.Name] = $property.Value
-        }
-        $json = $merged | ConvertTo-Json -Depth 20
-        [System.IO.File]::WriteAllText($settingsPath, $json, (New-Object System.Text.UTF8Encoding($false)))
+        Merge-Settings -SettingsPath $settingsPath -UserSettings $oldSettings
         Write-Note "merged your existing settings into the repo's settings.json"
     }
 }
