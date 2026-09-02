@@ -22,6 +22,11 @@ a re-run just updates the config via `git pull`. Nothing needs admin rights.
 2. `winget install Git.Git` and `winget install Oven-sh.Bun` (each skipped when
    already on PATH), refreshing PATH in the running process — winget writes the
    new PATH to the registry, not to your session.
+   Git's `bin` directory is added to your user PATH as well: winget only adds
+   `Git\cmd`, so `bash` would otherwise resolve to nothing, or to WSL's launcher
+   in System32, which cannot open `C:/` paths. With WSL enabled, System32 still
+   wins (machine PATH precedes user PATH); use the full path to Git's `bash.exe`
+   then.
 3. `bun add -g --ignore-scripts @earendil-works/pi-coding-agent`, and puts bun's
    global bin directory on your user PATH if it is not there already.
 4. Clones this repo into `~/.pi/agent` (or `$env:PI_CODING_AGENT_DIR`).
@@ -29,7 +34,8 @@ a re-run just updates the config via `git pull`. Nothing needs admin rights.
    - Existing pi directory that is not a clone → adopted in place: the repo is
      checked out into it, your old `settings.json` is backed up to
      `settings.json.bak` and its keys (theme, default model, extra packages)
-     are merged back in. Repo opinions win for `npmCommand` and the package list.
+     are merged back in. Repo opinions win for `npmCommand`, `defaultTools` and
+     the package list.
 5. Runs `pi install` for every package listed in `settings.json`. pi would also
    install missing packages on its next startup — doing it here just makes
    failures visible immediately.
@@ -38,7 +44,8 @@ a re-run just updates the config via `git pull`. Nothing needs admin rights.
 
 | Path | |
 | --- | --- |
-| `settings.json` | the single source of truth: `npmCommand` is `bun` (pi defaults to the literal command `npm`, which does not exist on a bun-only machine) and the `packages` list below |
+| `settings.json` | the single source of truth: `npmCommand` is `bun` (pi defaults to the literal command `npm`, which does not exist on a bun-only machine), `defaultTools` swaps the model-facing `bash` tool for `powershell` (see below), and the `packages` list |
+| `APPEND_SYSTEM.md` | appended to pi's system prompt in every session: Windows environment, prefer PowerShell, keep existing line endings |
 | `extensions/` | team-local extensions (`.ts`/`.js`), auto-loaded by pi |
 | `skills/` | team-local skills, auto-loaded (top-level `.md` files and `SKILL.md` folders) |
 | `prompts/` | prompt templates, auto-loaded |
@@ -58,6 +65,19 @@ Packages installed from `settings.json`:
 | `npm:pi-observability` | |
 | `npm:@dietrichgebert/ponytail` | |
 | [`plugin-pi-bifrost`](https://github.com/TefenlilioE/plugin-pi-bifrost) | the Bifrost gateway provider |
+
+## Windows-first tool set
+
+`defaultTools` is `["read", "powershell", "edit", "write", "grep", "find", "ls"]`:
+the full built-in set, with `bash` replaced by `powershell`. The `powershell` tool
+runs `pwsh.exe` when installed, otherwise Windows PowerShell, always with
+`-NoProfile -NonInteractive -ExecutionPolicy Bypass`, so the model never depends on
+Git Bash being present. `APPEND_SYSTEM.md` tells it the same in words: Windows paths and
+commands, no Bash/Linux/macOS assumptions, and keep whatever line endings a file
+already has. The interactive `!` / `!!` commands still go through Git Bash, which
+the installer brings in with git anyway. To get `bash` back for the model, add it
+to the list (`["read", "bash", "powershell", ...]`) or override per project in
+`.pi/settings.json`.
 
 ## After it runs
 

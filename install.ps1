@@ -97,6 +97,35 @@ function Install-WingetPackage {
     Write-Note "$Command installed: $((Get-Command $Command).Source)"
 }
 
+# winget's Git install only puts Git\cmd (git.exe) on PATH. Git Bash lives in
+# Git\bin and pi finds it there for its own `!` commands, but the model's shell
+# tool cannot: a bare `bash` in PowerShell resolves to nothing - or, with WSL
+# enabled, to System32\bash.exe, which cannot open C:/ paths. Put Git\bin on the
+# user PATH so `bash script.sh` means Git Bash.
+function Add-GitBashToPath {
+    $git = Get-Command git -ErrorAction SilentlyContinue
+    if (-not $git) { return }
+    # ...\Git\cmd\git.exe -> ...\Git
+    $gitRoot = Split-Path (Split-Path $git.Source -Parent) -Parent
+    $binDir = Join-Path $gitRoot 'bin'
+    if (-not (Test-Path (Join-Path $binDir 'bash.exe'))) {
+        Write-Note "no bash.exe under $binDir, leaving PATH alone"
+        return
+    }
+    if (Add-ToUserPath $binDir) {
+        Write-Note "added $binDir to your PATH (Git Bash as 'bash')"
+    } else {
+        Write-Note "$binDir already on PATH"
+    }
+    # The machine PATH is searched before the user PATH, so WSL's launcher still
+    # shadows Git Bash when the WSL feature is enabled. Nothing to do about that
+    # without admin rights; the model is told to use the full path in that case.
+    $wslBash = Join-Path $env:SystemRoot 'System32\bash.exe'
+    if (Test-Path $wslBash) {
+        Write-Host "    note: $wslBash exists (WSL). It comes first on PATH, so a bare 'bash' runs WSL, not Git Bash." -ForegroundColor Yellow
+    }
+}
+
 # The corporate TLS-inspecting proxy's CA lives in the Windows certificate store,
 # which Node and bun ignore by default - they ship their own bundle, so anything
 # they fetch over https fails to verify. This switches them to the system store.
@@ -184,13 +213,13 @@ function Sync-ConfigRepo {
     }
 
     if ($oldSettings) {
-        # The repo's settings.json wins for npmCommand and its package list, but
-        # the user's other choices (theme, default model, extra packages) survive.
+        # The repo's settings.json wins for npmCommand, defaultTools and its package
+        # list, but the user's other choices (theme, default model, extra packages) survive.
         $merged = [ordered]@{}
         $repoSettings = Get-Content -Raw -Path $settingsPath | ConvertFrom-Json
         foreach ($property in $repoSettings.PSObject.Properties) { $merged[$property.Name] = $property.Value }
         foreach ($property in $oldSettings.PSObject.Properties) {
-            if ($property.Name -eq 'npmCommand') { continue }
+            if ($property.Name -in @('npmCommand', 'defaultTools')) { continue }
             if ($property.Name -eq 'packages') {
                 $repoPackages = @($merged['packages'])
                 $extra = @($property.Value) | Where-Object { $repoPackages -notcontains $_ }
@@ -238,6 +267,7 @@ Set-SystemCaTrust
 
 Write-Step 'git'
 Install-WingetPackage -Id 'Git.Git' -Command 'git'
+Add-GitBashToPath
 
 Write-Step 'bun'
 Install-WingetPackage -Id 'Oven-sh.Bun' -Command 'bun'

@@ -1,5 +1,6 @@
 {
   "npmCommand": ["bun"],
+  "defaultTools": ["read", "powershell", "edit", "write", "grep", "find", "ls"],
   "packages": [
     "npm:pi-subagents",
     "npm:pi-web-access",
